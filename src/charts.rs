@@ -22,6 +22,35 @@ fn nice_max(v: f32) -> f32 {
     10.0 * mag
 }
 
+/// Horizontal stacked bar with a legend (name, value text) underneath; `parts` are (name, color, value).
+pub fn stacked_bar(ui: &mut Ui, height: f32, parts: &[(&str, Color32, f64)], fmt: &dyn Fn(f64) -> String) {
+    let p = pal(ui);
+    let total: f64 = parts.iter().map(|x| x.2.max(0.0)).sum();
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 4, p.border.gamma_multiply(0.5));
+    let mut x = rect.left();
+    for (name, color, v) in parts {
+        if total <= 0.0 || *v <= 0.0 {
+            continue;
+        }
+        let w = (rect.width() as f64 * v / total) as f32;
+        let seg = Rect::from_min_max(Pos2::new(x, rect.top()), Pos2::new((x + w).min(rect.right()), rect.bottom()));
+        painter.rect_filled(seg, 0, *color);
+        if resp.hover_pos().map(|h| seg.contains(h)).unwrap_or(false) {
+            resp.clone().on_hover_text(format!("{name}: {} ({:.0}%)", fmt(*v), v / total * 100.0));
+        }
+        x += w;
+    }
+    ui.horizontal_wrapped(|ui| {
+        for (name, color, v) in parts {
+            crate::theme::dot(ui, *color);
+            ui.label(egui::RichText::new(format!("{name} {}", fmt(*v))).small());
+            ui.add_space(8.0);
+        }
+    });
+}
+
 /// `cap` is the number of samples spanning the full width (newest is rightmost).
 pub fn line_chart(ui: &mut Ui, height: f32, cap: usize, series: &[Series], y_max: Option<f32>, fmt: &dyn Fn(f32) -> String) {
     let p = pal(ui);

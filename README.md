@@ -1,10 +1,12 @@
 # System Monitor
 
-Linux system monitor and network manager (Rust, egui/eframe, Cloudscape-inspired UI), plus a text-mode CLI.
+Linux system monitor, network manager and Docker administration tool (Rust, egui/eframe, Cloudscape-inspired UI), plus a text-mode CLI.
 Runs as your user; never as root. Administrative steps go through PolicyKit (`pkexec`) and are always user-initiated.
 
+![Dashboard](docs/screenshots/dashboard.png)
+
     ./SystemMonitor                 # GUI, Dashboard
-    ./SystemMonitor --page proxy    # dashboard cpu memory network storage processes proxy dns settings
+    ./SystemMonitor --page proxy    # dashboard cpu memory network storage processes proxy dns docker settings
     ./SystemMonitor --install       # add to the application menu; --uninstall removes it
     ./SystemMonitor --gfx software  # graphics backend: auto | hardware | software | headless
     ./SystemMonitor --cli [cmd]     # text mode, works without a display (see below)
@@ -69,6 +71,7 @@ Built in a Debian 11 container (glibc 2.31) by `./build.sh glibc-compat`, the sa
     SystemMonitor --cli proxy           # GNOME probe, session proxy, shell hooks
     SystemMonitor --cli proxy-env bash  # script to bring an open terminal up to date
     SystemMonitor --cli shell-setup status|install|remove [bash] [zsh] [fish]
+    SystemMonitor --cli docker [status|df|containers|images|preview [-a] [--volumes]|events|audit]   # read-only
 
 With no display (no `WAYLAND_DISPLAY`/`DISPLAY`) or `--gfx headless`, the GUI binary prints this status report
 instead of failing. In a build without the GUI, text mode is the only mode.
@@ -144,6 +147,78 @@ themselves**. New processes inherit from their parent: graphical launches from t
 * **Existing terminals:** run `eval "$(SystemMonitor --cli proxy-env bash)"` (zsh: same; fish:
   `SystemMonitor --cli proxy-env fish | source`). It exports the current proxy, or unsets the variables if the proxy is disabled.
 
+## Docker management
+
+![Docker overview](docs/screenshots/docker.png)
+
+The **Docker** page (`--page docker`) manages the local Docker Engine without a terminal. It has these tabs:
+
+| Tab | What it does |
+|---|---|
+| Overview | Engine status, version and API version, storage/logging driver, container states (running/paused/stopped/unhealthy), image/volume/network counts, Docker disk usage against the host disk, reclaimable space, last cleanup, live CPU/memory charts, busiest containers |
+| Containers | Search, state filter, sortable table (name, ID, image, state + health, uptime, ports, created, CPU, memory). Start, stop, restart, pause, unpause, remove, force remove (confirmed). Details: summary/health log, environment (secret-looking values hidden by default), ports, mounts, networks, CPU/memory/network/disk I/O charts, live logs (follow, tail, timestamps, filter), an interactive terminal (`exec` with a TTY), full inspect JSON |
+| Images | Pull with progress, search, filters (in use / unused / dangling / older versions), size, created, which containers use each image, duplicate tags, untag/remove (images used by containers are refused), layers (history) and inspect |
+| Storage | `/system/df` analysis: images, container writable layers, volumes, build cache, reclaimable space per type, share of the host disk, unused and orphaned objects, per-object tables sortable by size |
+| Cleanup | Separate actions or `system prune` / `prune -a` / `prune --volumes` presets. Always shows a **preview** (every object, its size, warnings, and what is kept and why) and an estimate before anything is deleted; then a confirmation; then per-item results, space recovered and host free space before/after |
+| Networks | List with driver, scope, subnet, gateway, attached containers; create (bridge/macvlan/ipvlan/overlay, subnet/gateway validated), remove, connect/disconnect containers, inspect |
+| Volumes | Name, driver, mountpoint, size (when the driver can measure it), users, unused filter; create, inspect, remove (refused while used; typing the name is required when the volume may hold data) |
+| Events & monitoring | Live engine event stream (the last hour is replayed at start), filters by type, action and container, pause; CPU/memory of all containers over time |
+| Proxy | `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` with HTTP/HTTPS/SOCKS5 and authentication, for the **daemon** (`daemon.json` `proxies`: pulls, pushes, registry access) and/or **containers and builds** (`~/.docker/config.json` `proxies.default`). Shows the current values (passwords masked) and what the daemon reports as in effect, warns about conflicting systemd drop-ins, **tests connectivity** through the proxy (HTTP CONNECT or SOCKS5 handshake incl. credentials) before applying |
+| Daemon configuration | `daemon.json` editor plus form fields (registry mirrors, insecure registries, DNS, log driver and rotation, live-restore, data-root, storage driver); live validation on every keystroke, `dockerd --validate`, backup before every save, backups list and restore, guarded daemon restart |
+
+### Installation and requirements
+
+* Docker Engine 20.10 or newer (API ≥ 1.41) on the same machine; tested with Docker 29.9 (API 1.56; the client speaks
+  API 1.47 and negotiates down for older daemons). Socket: `DOCKER_HOST=unix://…`, else `/var/run/docker.sock`, else the
+  rootless `$XDG_RUNTIME_DIR/docker.sock`. TCP `DOCKER_HOST` endpoints are not supported (they would need TLS client certificates).
+* Your user needs access to the Docker socket: `sudo usermod -aG docker $USER`, then log out and in. The app does not
+  do this for you (see Security).
+* Changing `daemon.json` and restarting the daemon needs PolicyKit (`pkexec`) and an administrator password, like the
+  system-wide proxy. `dockerd` on the machine enables `dockerd --validate` checks (optional).
+* No extra libraries: the Engine API client is plain Rust over the Unix socket (no new crates).
+
+### Configuration notes
+
+* **Daemon proxy vs. container proxy.** The daemon uses its proxy for image pulls/pushes and registry logins; it supports
+  HTTP_PROXY, HTTPS_PROXY and NO_PROXY (not ALL_PROXY; the UI says so and leaves it out). The client file sets the variables
+  the `docker` CLI injects into **new** containers and builds, including ALL_PROXY; no restart is needed.
+* **A daemon restart is required** after any `daemon.json` change (proxy or other settings): the daemon reads the file only at start.
+  The UI shows a "Restart required" banner and explains the impact before restarting: without `live-restore`, running containers
+  stop; those with a restart policy come back.
+* **Merging, never overwriting.** Every change re-reads the current file and changes only its own keys (`proxies`, or the form fields);
+  every other key is kept (key order is normalized). In `~/.docker/config.json` only `proxies.default` changes; `auths`,
+  `credsStore` and other entries are preserved. Backups: `~/.config/SystemMonitor/backups/docker/` (0600) before each save,
+  plus a root-only `daemon.json.systemmonitor-<time>.bak` next to the file (last 10 kept).
+* Proxy passwords have to live inside these files (Docker has no keyring). `daemon.json` is then written `0600`. Passwords are never shown
+  (masked in the UI, replaced by a placeholder in the editor and put back on save) and never logged.
+
+### Security
+
+* The frontend never sees the socket: this is a desktop app and every Engine API call runs in-process on a worker thread.
+  No `docker` CLI is run and no terminal output is parsed; structured JSON from the Engine API only.
+* **Who may use it.** Access to the Docker socket is Docker's own administrator boundary (root or the `docker` group, which is
+  root-equivalent). Without it the page explains why and changes nothing; it never escalates. Host-level changes (`daemon.json`,
+  restart) additionally require PolicyKit administrator authentication and run in a separate helper process
+  (`SystemMonitor --helper-docker write <staged>|restart`) that re-validates the staged file (regular file, owned by the caller,
+  ≤ 256 KiB, JSON object, all checks below), writes atomically and runs a fixed `systemctl restart docker.service` argv.
+* **Input validation.** Container/volume/network names and IDs follow Docker's own grammar; image references are parsed
+  (registry, path, tag, digest); everything placed in a URL is percent-encoded; exec commands are passed as an argv array
+  (no shell). `daemon.json` checks: types of known keys, URLs of mirrors, registry host/CIDR, DNS IPs, log options as strings
+  (a number there stops dockerd from starting), proxy URLs; `"hosts"` with `tcp://` and no `tlsverify` is **refused** (it would
+  hand root to the network).
+* **Destructive operations** need a confirmation; force-removing a running container and deleting volumes that may hold data need
+  the name / `DELETE VOLUMES` typed. Cleanup deletes exactly the previewed objects one by one **without force**, so anything that
+  started being used in the meantime is refused by Docker. Running/paused containers, images of kept containers and mounted
+  volumes are never selected; removing a container never removes its volumes; named volumes are only included on explicit request.
+* **Audit log.** Every change (lifecycle actions, removals, pulls, exec sessions, network/volume changes, cleanup items, proxy and
+  daemon changes, restarts) is appended to `~/.config/SystemMonitor/docker-audit.log` (JSON lines, 0600, rotated at 1 MiB) with
+  time, user, action, object and outcome. Values are never logged and URLs are scrubbed of credentials. `--cli docker audit` prints it.
+* Timeouts on every call (15 s by default, longer for stop/restart, `df`, pruning); streams (logs, events, exec) are cancelled when closed.
+  Environment variables named like `*PASSWORD*`, `*TOKEN*`, `*KEY*`, `*SECRET*` are hidden until you choose to show them.
+
+Real-time data uses background threads instead of WebSockets/SSE (there is no browser): the engine's `/events` stream drives
+automatic list refreshes and the Events tab; container statistics are polled every 2 s, only while a Docker page is visible.
+
 ## DNS manager
 
 Profiles: Automatic (DHCP), Cloudflare, Google, Quad9, custom, IPv4 and IPv6. The backend is chosen from what is
@@ -216,8 +291,16 @@ Optional services, detected and disabled gracefully: NetworkManager, systemd-res
 
 Machine: AlmaLinux 10.2, KDE Plasma (Wayland + XWayland), NetworkManager, no systemd-resolved, Mesa llvmpipe available.
 
-* `cargo test`: 40 tests (+4 live tests, run on demand) with GUI and with `--no-default-features` (graphics planning, persistence recovery/migration/concurrency,
-  SMART parsing with mocked output and a fake `smartctl`, shell hooks, DNS stack classification, GNOME apply/rollback with a fake `gsettings`, privileged-helper validation, sampler shutdown).
+* `cargo test`: 62 tests (+5 live tests, run on demand) with GUI and with `--no-default-features` (graphics planning, persistence recovery/migration/concurrency,
+  SMART parsing with mocked output and a fake `smartctl`, shell hooks, DNS stack classification, GNOME apply/rollback with a fake `gsettings`, privileged-helper validation, sampler shutdown;
+  Docker: HTTP/chunked/multiplexed-stream parsing, error classification incl. permission denied, input validation before any request, a fake
+  Engine on a Unix socket, cleanup planning and execution safety (running containers, used images, volume confirmation, order, audit), disk usage
+  totals, stats/CPU maths, daemon.json validation and merge, client config merge, proxy URL parsing/masking, proxy connectivity against fake
+  HTTP-CONNECT and SOCKS5 proxies, the privileged daemon.json helper, editor secret masking, ANSI stripping).
+* Docker live test (`cargo test -- --ignored live_docker`) against Docker 29.9.2 here: inventory, `df`, container create/start/logs/remove,
+  network create/connect/disconnect/remove, volume create/inspect/remove, image history. `--cli docker` commands ran against it, and every
+  Docker tab was rendered in the GUI. Not exercised live: `daemon.json` write and daemon restart through the real `pkexec` dialog
+  (the helper is tested unprivileged against a temporary directory), a real upstream proxy, swarm/overlay networks, rootless Docker.
 * Static musl core: built, `file` = static-PIE, `ldd` = not dynamic, all `--cli` commands run including D-Bus detection.
 * Static musl **GUI**: built and started to confirm it cannot open a window (see above); the fallback printed the diagnostics
   and the text report without crashing.
@@ -243,7 +326,10 @@ Machine: AlmaLinux 10.2, KDE Plasma (Wayland + XWayland), NetworkManager, no sys
 * Open terminals never inherit proxy changes by themselves (see above).
 * Persistent DNS on resolved-only systems is not written by this program (explained in the UI/CLI).
 * GNOME proxy passwords are not stored in dconf by design.
-* Default egui fonts only (no CJK/RTL coverage); icons are text-only.
+* Default egui fonts only (no CJK/RTL coverage); icons are text-only. This also means **no Persian / right-to-left UI**: egui
+  has no bidirectional text layout and the embedded fonts have no Arabic-script glyphs, so the Docker page is English-only.
+* Docker: only the local Unix socket (no remote/TCP hosts, no swarm services/stacks management); private-registry pulls need a prior
+  `docker login`; HTTPS proxies (TLS to the proxy) are tested for TCP reachability only.
 
 ## License
 

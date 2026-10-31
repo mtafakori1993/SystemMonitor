@@ -19,6 +19,7 @@ Commands:
   proxy          proxy status: GNOME gsettings/dconf probe, session environment, shell hooks
   proxy-env SH   print proxy environment for bash|zsh|fish (use: eval \"$(SystemMonitor --cli proxy-env bash)\")
   shell-setup    status | install | remove [bash] [zsh] [fish]: managed, reversible start-up-file block
+  docker [what]  Docker engine: status (default) | df | containers | images | preview [-a] [--volumes] | events | audit
   help           this text
 ";
 
@@ -211,6 +212,7 @@ fn extra(cmd: &str, rest: &[String]) -> i32 {
         "proxy-env" => return proxy_env(rest),
         "shell-setup" => return shell_setup(rest),
         "proxy" => return proxy_status(),
+        "docker" => return crate::docker::cli::run(rest),
         _ => {}
     }
     eprintln!("unknown command '{cmd}'\n\n{USAGE}");

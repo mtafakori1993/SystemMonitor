@@ -11,6 +11,7 @@ mod cpu;
 mod dashboard;
 mod dns;
 mod dnsenv;
+mod docker;
 mod gfx;
 mod install;
 mod linux;
@@ -40,7 +41,13 @@ fn main() {
     if args.len() == 3 && args[1] == "--helper-etc-environment" {
         std::process::exit(proxy::helper_main(&args[2]));
     }
+    if args.len() >= 3 && args[1] == "--helper-docker" {
+        std::process::exit(docker::config::helper_main(&args[2..]));
+    }
     if let Some(i) = args.iter().position(|a| a == "--cli") {
+        // `--cli docker events | head` should end quietly, not panic on the closed pipe (text mode only;
+        // the GUI keeps SIGPIPE ignored so a closed socket is an error, not a kill)
+        unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
         std::process::exit(cli::run(&args[i + 1..]));
     }
     #[cfg(feature = "gui")]

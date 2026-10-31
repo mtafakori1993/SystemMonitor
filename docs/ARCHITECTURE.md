@@ -12,6 +12,9 @@ Audit of every execution path (all in `src/`):
 | `dbus-rt` (1 thread) | `linux::rt()` | process | polls zbus I/O | process exit |
 | bench threads | `dns::bench` fan-out | one benchmark | UDP with 1.5 s timeout | checks `linux::shutdown()` between probes |
 | a few `std::thread::spawn` in `proxy.rs` | detached one-shot jobs (detect, apply, keyring) | one job | D-Bus / `Command` | result channel dropped on exit |
+| `docker-stats` | `docker::live::Live::start` (first visit of the Docker page) | until `Live` drops | Engine API over the Unix socket (15 s timeouts), interruptible sleep | `Stop` flag; joined on drop; idles when no Docker page was shown for 6 s |
+| `docker-events` | same | until `Live` drops | `/events` stream (blocking read) | `Stop` flag + `Canceller` shuts the socket down; joined on drop |
+| `docker-logs`, `docker-exec` | Containers tab | while the log view / terminal is open | log stream / hijacked exec socket | socket shut down when the session is dropped |
 
 Rules the code follows:
 

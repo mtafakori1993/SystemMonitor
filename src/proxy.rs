@@ -216,7 +216,7 @@ fn ep(s: &Slot) -> Option<Ep> {
     Some(Ep { scheme: s.scheme, host: s.host.trim().to_string(), port: parse_port(&s.port)? })
 }
 
-fn pct_encode(s: &str) -> String {
+pub(crate) fn pct_encode(s: &str) -> String {
     s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
 

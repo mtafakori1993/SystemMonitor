@@ -60,7 +60,7 @@ fn unescape(s: &str) -> String {
     s.replace("\\040", " ").replace("\\011", "\t").replace("\\134", "\\")
 }
 
-fn statvfs(path: &str) -> Option<(u64, u64, u64)> {
+pub(crate) fn statvfs(path: &str) -> Option<(u64, u64, u64)> {
     let c = CString::new(path).ok()?;
     unsafe {
         let mut st: libc::statvfs = std::mem::zeroed();

@@ -20,10 +20,11 @@ pub enum Page {
     Processes,
     Proxy,
     Dns,
+    Docker,
     Settings,
 }
 
-const PAGES: [(Page, &str, &str); 9] = [
+const PAGES: [(Page, &str, &str); 10] = [
     (Page::Dashboard, "Dashboard", ""),
     (Page::Cpu, "CPU", ""),
     (Page::Memory, "Memory", ""),
@@ -32,6 +33,7 @@ const PAGES: [(Page, &str, &str); 9] = [
     (Page::Processes, "Processes", ""),
     (Page::Proxy, "Proxy Manager", ""),
     (Page::Dns, "DNS Manager", ""),
+    (Page::Docker, "Docker", ""),
     (Page::Settings, "Settings", ""),
 ];
 
@@ -71,6 +73,7 @@ pub struct App {
     proc_ui: processes::ProcUi,
     proxy: crate::proxy::ProxyUi,
     dns: crate::dns::DnsUi,
+    docker: crate::docker::ui::DockerUi,
     nav_open: bool,
     shot: Option<(String, Instant)>,
 }
@@ -104,7 +107,7 @@ impl App {
         let proxy = crate::proxy::ProxyUi::new(&settings, &desktop, &cc.egui_ctx);
         let dns = crate::dns::DnsUi::new(&settings, &cc.egui_ctx);
         let _ = &mut notices;
-        Self { sampler, cfg, settings, page: start_page(), notices, services: Services::default(), services_rx, desktop, net_selected: String::new(), storage_ui: Default::default(), proc_ui: Default::default(), proxy, dns, nav_open: true, shot: std::env::var("SYSMON_SHOT").ok().map(|p| (p, Instant::now())) }
+        Self { sampler, cfg, settings, page: start_page(), notices, services: Services::default(), services_rx, desktop, net_selected: String::new(), storage_ui: Default::default(), proc_ui: Default::default(), proxy, dns, docker: Default::default(), nav_open: true, shot: std::env::var("SYSMON_SHOT").ok().map(|p| (p, Instant::now())) }
     }
 
     fn sync_settings(&mut self, ctx: &egui::Context) {
@@ -179,11 +182,13 @@ impl App {
             });
     }
 
-    /// Developer aid: `SYSMON_SHOT=/path.ppm` saves this window's own framebuffer after 4 s and exits.
+    /// Developer aid: `SYSMON_SHOT=/path.ppm` saves this window's own framebuffer after 4 s
+    /// (`SYSMON_SHOT_DELAY=<seconds>` to wait longer) and exits.
     fn debug_screenshot(&mut self, ctx: &egui::Context) {
         let Some((path, t0)) = self.shot.clone() else { return };
         ctx.request_repaint_after(Duration::from_millis(300));
-        if t0.elapsed() > Duration::from_secs(4) {
+        let delay = std::env::var("SYSMON_SHOT_DELAY").ok().and_then(|s| s.parse::<u64>().ok()).unwrap_or(4).clamp(1, 120);
+        if t0.elapsed() > Duration::from_secs(delay) {
             ctx.request_screenshot(move |img| {
                 let mut out = format!("P6\n{} {}\n255\n", img.width(), img.height()).into_bytes();
                 for p in &img.pixels {
@@ -225,7 +230,7 @@ impl App {
     }
 }
 
-/// `SystemMonitor --page proxy` opens directly on a page (dashboard, cpu, memory, network, storage, processes, proxy, dns, settings).
+/// `SystemMonitor --page proxy` opens directly on a page (dashboard, cpu, memory, network, storage, processes, proxy, dns, docker, settings).
 fn start_page() -> Page {
     let a: Vec<String> = std::env::args().collect();
     let want = a.iter().position(|x| x == "--page").and_then(|i| a.get(i + 1)).map(|s| s.to_lowercase()).unwrap_or_default();
@@ -255,6 +260,7 @@ impl eframe::App for App {
         }
         self.proxy.poll(&mut self.notices, &mut self.settings);
         self.dns.poll(&mut self.notices, &mut self.settings);
+        self.docker.poll(ctx, &mut self.notices);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -298,6 +304,10 @@ impl eframe::App for App {
                 Page::Dns => {
                     drop(snap);
                     scroll(ui, &mut |ui| self.dns.page(ui, &mut self.settings, &self.services, &mut self.notices));
+                }
+                Page::Docker => {
+                    drop(snap);
+                    scroll(ui, &mut |ui| self.docker.page(ui, &mut self.notices));
                 }
                 Page::Settings => {
                     drop(snap);
