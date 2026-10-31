@@ -95,6 +95,11 @@ pub fn page(ui: &mut Ui, s: &mut Settings, services: &Services, desktop: &Deskto
     theme::container(ui, "Graphics", |ui| {
         let gi = crate::gfx::runtime_info();
         theme::kv(ui, "Renderer", if gi.renderer.is_empty() { "unknown".into() } else { gi.renderer.clone() });
+        let rep = crate::gfx::detect();
+        theme::kv(ui, "Virtual machine", rep.hypervisor.clone().unwrap_or_else(|| "not detected".into()));
+        for g in &rep.gpus {
+            theme::kv(ui, &format!("GPU {}", g.card), format!("{} (driver {}){}", g.vendor, if g.driver.is_empty() { "?" } else { &g.driver }, g.virtual_kind.map(|k| format!(" — {k}")).unwrap_or_default()));
+        }
         theme::kv(ui, "Initialization stage", if gi.stage.is_empty() { "unknown".into() } else { gi.stage.clone() });
         if crate::gfx::is_software_renderer(&gi.renderer) {
             theme::status(ui, Kind::Warning, "Software rendering (no GPU acceleration)");
